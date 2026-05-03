@@ -1,0 +1,42 @@
+# Build artifacts
+build/
+out/
+cmake-build-*/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.vcxproj.filters
+*.vcxproj
+*.sln
+CMakeSettings.json
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Compiled
+*.o
+*.obj
+*.lib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Testing/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/settings.local.json
