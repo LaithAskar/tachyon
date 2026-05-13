@@ -28,6 +28,18 @@ public:
     std::optional<Price> best_bid() const;
     std::optional<Price> best_ask() const;
 
+    // Aggregated depth view of a single price level.
+    struct LevelView {
+        Price       price;
+        Quantity    total_qty;
+        std::size_t order_count;
+    };
+
+    // Top N levels of each side, ordered "best first".
+    // bids: highest price first. asks: lowest price first.
+    std::vector<LevelView> top_bids(std::size_t n) const;
+    std::vector<LevelView> top_asks(std::size_t n) const;
+
     std::size_t size() const noexcept { return total_orders_; }
 
 private:

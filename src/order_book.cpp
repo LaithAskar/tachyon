@@ -97,4 +97,28 @@ std::optional<Price> OrderBook::best_ask() const {
     return asks_.begin()->first;
 }
 
+std::vector<OrderBook::LevelView> OrderBook::top_bids(std::size_t n) const {
+    std::vector<LevelView> out;
+    out.reserve(std::min(n, bids_.size()));
+    auto it = bids_.rbegin();
+    for (std::size_t i = 0; i < n && it != bids_.rend(); ++i, ++it) {
+        Quantity total = 0;
+        for (const Order& o : it->second) total += o.quantity;
+        out.push_back(LevelView{it->first, total, it->second.size()});
+    }
+    return out;
+}
+
+std::vector<OrderBook::LevelView> OrderBook::top_asks(std::size_t n) const {
+    std::vector<LevelView> out;
+    out.reserve(std::min(n, asks_.size()));
+    auto it = asks_.begin();
+    for (std::size_t i = 0; i < n && it != asks_.end(); ++i, ++it) {
+        Quantity total = 0;
+        for (const Order& o : it->second) total += o.quantity;
+        out.push_back(LevelView{it->first, total, it->second.size()});
+    }
+    return out;
+}
+
 }  // namespace tachyon

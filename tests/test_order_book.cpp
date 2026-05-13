@@ -72,6 +72,42 @@ TEST(OrderBook, CancelRemovesRestingOrder) {
     EXPECT_FALSE(book.cancel(999)); // unknown id
 }
 
+TEST(OrderBook, TopBidsHighestFirstAndAggregated) {
+    OrderBook book;
+    book.submit(make_limit(1, Side::Buy, 100'00, 10));
+    book.submit(make_limit(2, Side::Buy, 101'00, 5));
+    book.submit(make_limit(3, Side::Buy, 101'00, 3));  // same level as #2
+    book.submit(make_limit(4, Side::Buy,  99'00, 20));
+
+    auto top = book.top_bids(5);
+    ASSERT_EQ(top.size(), 3u);
+    EXPECT_EQ(top[0].price, 101'00);
+    EXPECT_EQ(top[0].total_qty, 8u);
+    EXPECT_EQ(top[0].order_count, 2u);
+    EXPECT_EQ(top[1].price, 100'00);
+    EXPECT_EQ(top[1].total_qty, 10u);
+    EXPECT_EQ(top[1].order_count, 1u);
+    EXPECT_EQ(top[2].price,  99'00);
+}
+
+TEST(OrderBook, TopAsksLowestFirstAndLimited) {
+    OrderBook book;
+    book.submit(make_limit(1, Side::Sell, 101'00, 10));
+    book.submit(make_limit(2, Side::Sell, 100'00, 5));
+    book.submit(make_limit(3, Side::Sell, 102'00, 7));
+
+    auto top = book.top_asks(2);  // request fewer than available
+    ASSERT_EQ(top.size(), 2u);
+    EXPECT_EQ(top[0].price, 100'00);
+    EXPECT_EQ(top[1].price, 101'00);
+}
+
+TEST(OrderBook, TopOnEmptyBookIsEmpty) {
+    OrderBook book;
+    EXPECT_TRUE(book.top_bids(10).empty());
+    EXPECT_TRUE(book.top_asks(10).empty());
+}
+
 TEST(OrderBook, CancelEmptiesLevel) {
     OrderBook book;
     book.submit(make_limit(1, Side::Buy, 100'00, 10));
