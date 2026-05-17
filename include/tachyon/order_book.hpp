@@ -1,76 +1,106 @@
 #pragma once
 
 #include <cstddef>
-#include <list>
-#include <map>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "tachyon/order.hpp"
+#include "tachyon/pool.hpp"
 #include "tachyon/trade.hpp"
 
 namespace tachyon {
 
+// Limit order book with a flat tick-indexed ladder and intrusive linked lists
+// per level, backed by a pool allocator. Designed so the hot path never
+// touches a tree node, never allocates, and walks at most one cache line per
+// level visit.
+//
+// Indexing: each side is a std::vector<Level> sized to (tick_max - tick_min + 1).
+// A uint64 bitmap per side flags non-empty levels so we can find the next
+// best level after a drain in O(span/64) words via _BitScanReverse/clz.
 class OrderBook {
 public:
-    OrderBook() = default;
+    // Default range covers $0.00 - $2000.00 for $0.01-tick instruments.
+    // Memory: ~5MB per side of mostly-empty Level slots. Empty slots are
+    // never touched (bitmap routes around them) so they don't pollute cache.
+    OrderBook() : OrderBook(/*tick_min=*/0, /*tick_max=*/200'000) {}
+    OrderBook(Price tick_min, Price tick_max);
 
-    // Submit a new order. Trades produced by matching are appended to `out`
-    // (which is cleared first, so calls are independent). The caller can reuse
-    // the same vector across millions of submits to avoid hot-path allocation.
-    //
-    // For Limit orders, residual quantity (if any) is added to the resting book.
-    // For Market orders, residual is dropped.
-    // Zero-quantity orders are rejected and produce no trades.
     void submit(const Order& order, std::vector<Trade>& out);
-
-    // Convenience wrapper that allocates and returns a Trade vector. Equivalent
-    // to calling the out-param overload with a fresh vector; prefer the
-    // out-param form on hot paths.
     std::vector<Trade> submit(const Order& order);
 
-    // Cancel a resting order by id. Returns true if found and removed.
     bool cancel(OrderId id);
 
     std::optional<Price> best_bid() const;
     std::optional<Price> best_ask() const;
 
-    // Aggregated depth view of a single price level.
     struct LevelView {
         Price       price;
         Quantity    total_qty;
         std::size_t order_count;
     };
 
-    // Top N levels of each side, ordered "best first".
-    // bids: highest price first. asks: lowest price first.
     std::vector<LevelView> top_bids(std::size_t n) const;
     std::vector<LevelView> top_asks(std::size_t n) const;
 
-    // Compact JSON snapshot: BBO + top-N levels on each side.
-    // Shape: {"bid":<int|null>,"ask":<int|null>,"size":<int>,
-    //         "bids":[[price,qty,orders],...],"asks":[[price,qty,orders],...]}
     std::string snapshot_json(std::size_t depth) const;
 
     std::size_t size() const noexcept { return total_orders_; }
 
 private:
-    // Ascending price -> FIFO queue of resting orders at that price.
-    // Best bid is rbegin() (highest price), best ask is begin() (lowest).
-    using BookSide = std::map<Price, std::list<Order>>;
+    struct Level {
+        OrderNode*  head        = nullptr;
+        OrderNode*  tail        = nullptr;
+        Quantity    total_qty   = 0;
+        std::size_t order_count = 0;
 
-    struct LevelHandle {
-        Side                       side;
-        BookSide::iterator         level_it;
-        std::list<Order>::iterator order_it;
+        bool empty() const noexcept { return head == nullptr; }
     };
 
-    BookSide bids_;
-    BookSide asks_;
-    std::unordered_map<OrderId, LevelHandle> id_index_;
+    // -- bitmap helpers --
+    void set_bit  (std::vector<std::uint64_t>& bm, std::size_t idx);
+    void clear_bit(std::vector<std::uint64_t>& bm, std::size_t idx);
+    // Find the highest set bit at or below idx_hint. Returns -1 if none.
+    std::int64_t find_prev_set(const std::vector<std::uint64_t>& bm,
+                               std::int64_t idx_hint) const;
+    // Find the lowest set bit at or above idx_hint. Returns span_ if none.
+    std::int64_t find_next_set(const std::vector<std::uint64_t>& bm,
+                               std::int64_t idx_hint) const;
 
+    // -- level list ops (intrusive doubly-linked) --
+    void link_back (Level& lv, OrderNode* n);
+    void unlink    (Level& lv, OrderNode* n);
+
+    // -- index <-> price --
+    std::size_t price_to_idx(Price p) const {
+        return static_cast<std::size_t>(p - tick_min_);
+    }
+    Price idx_to_price(std::size_t i) const {
+        return tick_min_ + static_cast<Price>(i);
+    }
+    bool price_in_range(Price p) const {
+        return p >= tick_min_ && p <= tick_max_;
+    }
+
+    // -- members --
+    Price       tick_min_;
+    Price       tick_max_;
+    std::size_t span_;                 // tick_max_ - tick_min_ + 1
+
+    std::vector<Level>         bid_levels_;
+    std::vector<Level>         ask_levels_;
+    std::vector<std::uint64_t> bid_bitmap_;   // bit i = 1 iff bid_levels_[i].non-empty
+    std::vector<std::uint64_t> ask_bitmap_;
+
+    std::int64_t best_bid_idx_ = -1;          // -1 = empty side
+    std::int64_t best_ask_idx_;               // == span_ when empty
+
+    std::unordered_map<OrderId, OrderNode*> id_index_;
+
+    Pool        pool_;
     std::size_t total_orders_ = 0;
 };
 
