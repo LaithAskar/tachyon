@@ -18,10 +18,12 @@
 // Cancels (when emitted) instead carry "event":"cancel" with an "id" and the
 // resulting book snapshot.
 
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "tachyon/matching_engine.hpp"
@@ -117,17 +119,22 @@ struct Generator {
 }  // namespace
 
 int main(int argc, char** argv) {
-    int n_events   = 200;
-    std::size_t depth = 5;
+    // CLI: tachyon_stream [n_events=200] [depth=5] [delay_ms=0]
+    //   n_events == 0  -> run forever (until killed)
+    //   delay_ms  > 0  -> sleep between events; lets the dashboard render frames
+    int         n_events = 200;
+    std::size_t depth    = 5;
+    int         delay_ms = 0;
     if (argc > 1) n_events = std::atoi(argv[1]);
     if (argc > 2) depth    = static_cast<std::size_t>(std::atoi(argv[2]));
+    if (argc > 3) delay_ms = std::atoi(argv[3]);
 
     MatchingEngine engine;
     Generator      gen;
     std::vector<Trade> trades;
     trades.reserve(32);
 
-    for (int i = 0; i < n_events; ++i) {
+    for (int i = 0; n_events == 0 || i < n_events; ++i) {
         const bool cancel = gen.should_cancel();
         if (cancel) {
             const OrderId id = gen.pick_cancel_id();
@@ -146,6 +153,10 @@ int main(int argc, char** argv) {
                       << R"(,"trades":)" << trades_to_json(trades)
                       << R"(,"book":)"   << engine.book().snapshot_json(depth)
                       << "}\n";
+        }
+        std::cout.flush();   // pipe consumers (Node WS bridge) want line-by-line
+        if (delay_ms > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
         }
     }
     return 0;

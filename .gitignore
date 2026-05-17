@@ -38,5 +38,10 @@ Testing/
 .DS_Store
 Thumbs.db
 
+# Node (dashboard bridge)
+dashboard/node_modules/
+dashboard/package-lock.json
+npm-debug.log
+
 # Claude Code local settings
 .claude/settings.local.json

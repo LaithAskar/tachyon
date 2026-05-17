@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tachyon — live order book</title>
+<style>
+  :root {
+    --bg:        #0d1117;
+    --panel:     #161b22;
+    --border:    #30363d;
+    --text:      #c9d1d9;
+    --muted:     #8b949e;
+    --accent:    #58a6ff;
+    --bid:       #2ea043;
+    --bid-soft:  rgba(46, 160, 67, 0.18);
+    --ask:       #f85149;
+    --ask-soft:  rgba(248, 81, 73, 0.18);
+    --warn:      #d29922;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: ui-monospace, "JetBrains Mono", "Fira Code", Consolas,
+                 "Courier New", monospace;
+    font-size: 13px; line-height: 1.4;
+    height: 100%;
+  }
+  body { display: flex; flex-direction: column; }
+
+  header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    display: flex; align-items: baseline; gap: 14px;
+  }
+  header h1 {
+    margin: 0; font-size: 16px; letter-spacing: 0.4px;
+    color: var(--accent);
+  }
+  header .sub { color: var(--muted); font-size: 12px; }
+  header .conn {
+    margin-left: auto; font-size: 11px; padding: 2px 8px;
+    border-radius: 12px; border: 1px solid var(--border);
+  }
+  header .conn.ok { color: var(--bid); border-color: var(--bid); }
+  header .conn.bad { color: var(--ask); border-color: var(--ask); }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 1px; background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .stats .cell {
+    background: var(--panel); padding: 10px 14px;
+  }
+  .stats .label {
+    font-size: 10px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.6px; margin-bottom: 4px;
+  }
+  .stats .value { font-size: 18px; font-weight: 600; }
+  .stats .value.bid { color: var(--bid); }
+  .stats .value.ask { color: var(--ask); }
+  .stats .value.warn { color: var(--warn); }
+
+  main {
+    flex: 1; display: grid;
+    grid-template-columns: 1fr 360px;
+    gap: 1px; background: var(--border);
+    min-height: 0;
+  }
+  section {
+    background: var(--panel); padding: 14px 16px;
+    overflow: hidden; display: flex; flex-direction: column;
+  }
+  section h2 {
+    margin: 0 0 10px 0; font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.8px;
+  }
+
+  /* ---- depth chart -------------------------------------------------- */
+  .depth {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px; flex: 1; min-height: 0;
+  }
+  .depth .side {
+    display: flex; flex-direction: column; gap: 2px;
+    overflow: hidden;
+  }
+  .depth .side-label {
+    font-size: 10px; color: var(--muted); margin-bottom: 6px;
+    text-transform: uppercase; letter-spacing: 0.6px;
+  }
+  .depth .row {
+    position: relative; height: 22px;
+    display: grid; align-items: center;
+    padding: 0 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .depth .row .fill {
+    position: absolute; top: 0; bottom: 0;
+    pointer-events: none;
+  }
+  .depth .row .num {
+    position: relative; z-index: 1;
+    display: flex; justify-content: space-between;
+  }
+  .depth.bids .row { color: var(--bid); }
+  .depth.bids .fill {
+    right: 0; background: var(--bid-soft);
+  }
+  .depth .asks .row { color: var(--ask); }
+  .depth .asks .fill {
+    left: 0; background: var(--ask-soft);
+  }
+  .depth .row .qty   { color: var(--text); }
+  .depth .row .orders {
+    color: var(--muted); font-size: 11px; min-width: 24px;
+    text-align: right;
+  }
+
+  /* ---- trade tape --------------------------------------------------- */
+  .tape {
+    flex: 1; overflow-y: auto;
+    font-variant-numeric: tabular-nums;
+  }
+  .tape .t {
+    display: grid; grid-template-columns: 40px 1fr 50px 60px;
+    padding: 3px 0; border-bottom: 1px dotted var(--border);
+    font-size: 12px;
+  }
+  .tape .t.fresh { animation: flash 600ms ease-out; }
+  @keyframes flash {
+    from { background: rgba(88, 166, 255, 0.25); }
+    to   { background: transparent; }
+  }
+  .tape .seq  { color: var(--muted); }
+  .tape .px   { color: var(--accent); }
+  .tape .qty  { text-align: right; }
+  .tape .ids  { color: var(--muted); text-align: right; font-size: 11px; }
+
+  footer {
+    padding: 6px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    font-size: 11px; color: var(--muted);
+    display: flex; gap: 18px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>tachyon</h1>
+  <span class="sub">live order-book viewer · C++ matching engine</span>
+  <span id="conn" class="conn">disconnected</span>
+</header>
+
+<div class="stats">
+  <div class="cell"><div class="label">best bid</div>
+    <div id="bbo-bid" class="value bid">—</div></div>
+  <div class="cell"><div class="label">best ask</div>
+    <div id="bbo-ask" class="value ask">—</div></div>
+  <div class="cell"><div class="label">spread</div>
+    <div id="spread" class="value">—</div></div>
+  <div class="cell"><div class="label">book size</div>
+    <div id="book-size" class="value">—</div></div>
+  <div class="cell"><div class="label">events/sec</div>
+    <div id="eps" class="value">—</div></div>
+  <div class="cell"><div class="label">trades</div>
+    <div id="trade-count" class="value warn">0</div></div>
+</div>
+
+<main>
+  <section>
+    <h2>depth (top 8 each side)</h2>
+    <div class="depth">
+      <div class="side">
+        <div class="side-label">bids</div>
+        <div id="bids" class="bids"></div>
+      </div>
+      <div class="side">
+        <div class="side-label">asks</div>
+        <div id="asks" class="asks"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>trade tape (latest first)</h2>
+    <div id="tape" class="tape"></div>
+  </section>
+</main>
+
+<footer>
+  <span id="last-event">awaiting events…</span>
+  <span style="margin-left:auto">prices in ticks (1 tick = $0.01)</span>
+</footer>
+
+<script>
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const conn       = $('conn');
+const bboBid     = $('bbo-bid');
+const bboAsk     = $('bbo-ask');
+const spreadEl   = $('spread');
+const sizeEl     = $('book-size');
+const epsEl      = $('eps');
+const tradeCountEl = $('trade-count');
+const bidsEl     = $('bids');
+const asksEl     = $('asks');
+const tape       = $('tape');
+const lastEvent  = $('last-event');
+
+const MAX_TAPE_ROWS = 200;
+let totalTrades = 0;
+
+// ---- price formatting (integer ticks → $XX.YY) ----------------------------
+function fmtPrice(ticks) {
+  if (ticks === null || ticks === undefined) return '—';
+  const sign    = ticks < 0 ? '-' : '';
+  const a       = Math.abs(ticks);
+  const dollars = Math.floor(a / 100);
+  const cents   = a % 100;
+  return sign + dollars + '.' + String(cents).padStart(2, '0');
+}
+function fmtInt(n) { return n.toLocaleString(); }
+
+// ---- depth chart rendering ------------------------------------------------
+function renderSide(el, levels, isBid, maxQty) {
+  // levels: [[price, total_qty, order_count], ...]
+  let html = '';
+  for (const [px, q, oc] of levels) {
+    const width = maxQty ? (q / maxQty * 100).toFixed(1) : 0;
+    const fillStyle = `width:${width}%`;
+    html += `<div class="row">
+      <div class="fill" style="${fillStyle}"></div>
+      <div class="num">
+        <span class="px">${fmtPrice(px)}</span>
+        <span class="qty">${fmtInt(q)}</span>
+        <span class="orders">${oc > 1 ? '×' + oc : ''}</span>
+      </div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderDepth(book) {
+  const bids = book.bids || [];
+  const asks = book.asks || [];
+  let maxQty = 0;
+  for (const [, q] of bids) if (q > maxQty) maxQty = q;
+  for (const [, q] of asks) if (q > maxQty) maxQty = q;
+  renderSide(bidsEl, bids, true,  maxQty);
+  renderSide(asksEl, asks, false, maxQty);
+
+  bboBid.textContent = fmtPrice(book.bid);
+  bboAsk.textContent = fmtPrice(book.ask);
+  if (book.bid != null && book.ask != null) {
+    spreadEl.textContent = fmtPrice(book.ask - book.bid);
+  } else {
+    spreadEl.textContent = '—';
+  }
+  sizeEl.textContent = fmtInt(book.size);
+}
+
+// ---- trade tape -----------------------------------------------------------
+function pushTrade(seq, trade) {
+  ++totalTrades;
+  tradeCountEl.textContent = fmtInt(totalTrades);
+
+  const row = document.createElement('div');
+  row.className = 't fresh';
+  row.innerHTML =
+    `<span class="seq">#${seq}</span>` +
+    `<span class="px">${fmtPrice(trade.price)}</span>` +
+    `<span class="qty">${fmtInt(trade.qty)}</span>` +
+    `<span class="ids">${trade.taker}→${trade.maker}</span>`;
+  tape.insertBefore(row, tape.firstChild);
+  while (tape.children.length > MAX_TAPE_ROWS) tape.removeChild(tape.lastChild);
+}
+
+// ---- events per second ---------------------------------------------------
+let eventsThisWindow = 0;
+setInterval(() => {
+  epsEl.textContent = fmtInt(eventsThisWindow);
+  eventsThisWindow = 0;
+}, 1000);
+
+// ---- WebSocket plumbing --------------------------------------------------
+function describe(msg) {
+  if (msg.event === 'order') {
+    const o = msg.order;
+    return `t=${msg.t} ${o.type} ${o.side} ${o.qty}@${o.type === 'M' ? 'MKT' : fmtPrice(o.price)} ` +
+           `(id=${o.id})` + (msg.trades.length ? ` → ${msg.trades.length} trade(s)` : '');
+  }
+  if (msg.event === 'cancel') {
+    return `t=${msg.t} CANCEL ${msg.id} ${msg.ok ? 'ok' : 'no-op'}`;
+  }
+  return JSON.stringify(msg);
+}
+
+function connect() {
+  const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  const ws  = new WebSocket(url);
+  ws.onopen  = () => { conn.textContent = 'connected'; conn.className = 'conn ok'; };
+  ws.onclose = () => {
+    conn.textContent = 'disconnected — retrying';
+    conn.className   = 'conn bad';
+    setTimeout(connect, 1500);
+  };
+  ws.onerror = () => { /* close handler will retry */ };
+  ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    ++eventsThisWindow;
+    if (msg.book) renderDepth(msg.book);
+    if (msg.event === 'order' && msg.trades) {
+      for (const t of msg.trades) pushTrade(msg.t, t);
+    }
+    lastEvent.textContent = describe(msg);
+  };
+}
+
+connect();
+</script>
+</body>
+</html>
