@@ -1,91 +1,130 @@
-`# Tachyon — Limit Order Book Matching Engine
+# Tachyon
 
-Low-latency limit order book and matching engine in C++17. Single-threaded core,
-price-time priority, designed to be hot-path for a simulated exchange.
+Single-symbol limit order book and matching engine in C++17, with a live
+WebSocket dashboard. Built to demonstrate the data structures and
+allocation discipline that exchange-grade systems run on.
 
-## Why
+<!-- TODO: capture a screenshot of the running dashboard, save as docs/dashboard.png -->
 
-Most undergrad quant projects train an ML model on price data. Few build the
-infrastructure that exchanges run on. Tachyon is the latter: the data structures,
-matching logic, and performance discipline that interview shops like Citadel
-Securities, Jane Street, HRT, Optiver, and IMC ask candidates to demonstrate.
+![dashboard](docs/dashboard.png)
 
-## Targets
+## Numbers
 
-- **Throughput**: 1M+ orders/sec sustained on commodity hardware
-- **Latency**: p99 submit→ack under 20µs (single-threaded)
-- **Correctness**: strict price-time priority, no allocator surprises in the hot path
+Single-threaded core, commodity Windows desktop, MSVC `/O2`:
 
-## Architecture (planned)
+| metric | value |
+|---|---|
+| submit throughput (out-param hot path, mixed flow) | **~4.5M ops/sec** |
+| cancel throughput | ~5.0M ops/sec |
+| p50 submit latency | **300 ns** |
+| p99 submit latency | **1.6 µs** |
+| tests passing | 43 / 43 |
 
-```
-apps/main.cpp                  # demo driver
-include/tachyon/
-  types.hpp                    # OrderId, Price (ticks), Quantity, Side, OrderType
-  order.hpp                    # Order struct (POD)
-  trade.hpp                    # Trade struct (POD)
-  order_book.hpp               # OrderBook: bids + asks, submit / cancel / best
-  matching_engine.hpp          # MatchingEngine: dispatch on incoming messages
-src/
-  order_book.cpp
-  matching_engine.cpp
-tests/                         # GoogleTest unit tests
-benchmarks/                    # (later) Google Benchmark perf harness
-```
+Latency is `steady_clock`-measured on Windows — see `design.md §7` for
+the methodology and the honest disclaimer about scheduler-bound tails.
 
-## Roadmap
+## What it does
 
-| Week | Goal |
-|------|------|
-| 1 | Types + OrderBook skeleton compiling + first 3 tests passing. Add a single buy-limit, verify best_bid. |
-| 2 | submit() matches a crossing order against opposite book, generates Trades. Add cancel(). FIFO within a price level. |
-| 3 | Market orders. Partial fills. Edge cases (self-cross prevention, zero-quantity reject, price/qty bounds). Replay test against a recorded log. |
-| 4 | Benchmark harness. Throughput + latency percentiles. README with a chart. Integrate as Meridian's simulated exchange backend. |
+- Limit order book with strict **price-time priority**
+- Four order types: `Limit` (GTC), `Market`, `ImmediateOrCancel`,
+  `FillOrKill` (with all-or-nothing pre-check)
+- **Self-trade prevention** via per-order `account_id` — same-account
+  makers are skipped during matching without disturbing FIFO for others
+- O(1) `submit` / `cancel`; best-level advance after a drain is a
+  uint64 bitmap scan over the flat tick ladder
+- **No allocator traffic on the hot path** — pool-backed intrusive
+  doubly-linked list per level; the `id_index_` stores raw
+  `OrderNode*` pointers that stay valid for the life of the book
+- Out-of-process **live dashboard** over WebSocket: depth bars, trade
+  tape, BBO/spread/event-rate stats
 
-Stretch (only if ahead of schedule):
-- FIX-like binary message format for order entry
-- Lock-free SPSC queue (Boost.Lockfree) for ingestion thread → matching thread
-- Event-sourcing persistence + deterministic replay
-- WebSocket viewer (reuses Next.js skill from Meridian)
+## Architecture in one paragraph
+
+Each side of the book is a `std::vector<Level>` indexed by tick offset
+from a configured `tick_min`. A `uint64` bitmap per side flags
+non-empty levels; the best-bid / best-ask cursors are `int64` indices
+that get advanced via `_BitScanReverse64` / `_BitScanForward64` when a
+level drains. Each `Level` is an intrusive doubly-linked list of
+`OrderNode`s drawn from a block-growing `Pool` — once warmed, no
+allocator call happens during matching. The `MatchingEngine` exposes a
+trade-listener hook; a separate `tachyon_stream` binary uses it to
+emit one NDJSON event per submit on stdout, which a 100-line Node
+script bridges to a vanilla-JS WebSocket dashboard.
+
+Full reasoning, trade-offs, and the property-based test invariants
+live in [`design.md`](design.md).
 
 ## Build (Windows, VS 2022)
 
-Open **"Developer PowerShell for VS 2022"** from the Start menu. That sets up the
-MSVC environment. Then from this directory:
+Open **Developer PowerShell for VS 2022**, then from this directory:
 
 ```powershell
-# Generate solution + build
 cmake -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 
-# Run the demo
+# unit + property tests
+ctest --test-dir build -C Release --output-on-failure
+
+# scripted CLI demo
 .\build\bin\Release\tachyon.exe
 
-# Run tests (downloads GoogleTest the first time)
-ctest --test-dir build -C Release --output-on-failure
+# throughput / latency benchmarks
+cmake -B build -DTACHYON_BUILD_BENCHMARKS=ON
+cmake --build build --config Release
+.\build\bin\Release\bench_throughput.exe
+.\build\bin\Release\bench_latency.exe
 ```
 
-For faster iteration, generate Ninja or use the VS solution directly
-(`build\tachyon.sln`).
+## Run the live dashboard
 
-## Design notes — read before writing matching logic
+```powershell
+# one-time
+cmake --build build --config Release --target tachyon_stream
+npm --prefix dashboard install
 
-- **Price as integer ticks, never `double`.** A tick is a configurable unit (e.g.
-  $0.01 → multiplier 100; $0.0001 → 10000). Floating-point compare in a hot path
-  is a bug waiting to happen.
-- **Price-time priority**: at the same price, earlier orders match first. Use a
-  FIFO container per level (deque or intrusive list).
-- **O(1) cancel** matters: maintain an `unordered_map<OrderId, iterator>` so
-  cancel doesn't scan a level.
-- **No allocations on the match path.** Reuse `std::vector<Trade>` capacity. Do
-  not return by `std::vector` from inner loops once you optimize.
-- **Decide your data structure intentionally**. The default is
-  `std::map<Price, std::deque<Order>>` (bids reverse-ordered). For the perf
-  target, you'll later want a flat sorted vector or custom linked-level scheme.
-  Start with `std::map`; benchmark; replace.
+# every time
+node dashboard\server.js
+# open http://localhost:8080
+```
+
+The Node script spawns the C++ `tachyon_stream` binary, reads its
+NDJSON stdout, and rebroadcasts each event as a WebSocket frame. The
+browser renders depth bars, trade tape, BBO, and rolling events/sec.
+Tune `DELAY_MS=20 node dashboard\server.js` for a faster stream.
+
+## API surface
+
+```cpp
+tachyon::OrderBook book;                       // default range $0-$2000 (cent ticks)
+std::vector<tachyon::Trade> trades;
+trades.reserve(32);                            // amortise allocation
+
+book.submit(tachyon::Order{
+    /*id=*/1, tachyon::Side::Buy, tachyon::OrderType::Limit,
+    /*price=*/100'00, /*qty=*/10, /*ts_ns=*/0, /*account=*/0
+}, trades);
+
+book.cancel(/*id=*/1);
+auto bid = book.best_bid();
+std::string snap = book.snapshot_json(/*depth=*/5);
+```
+
+## What it deliberately is not
+
+- **Not a multi-symbol exchange.** One book per process, single symbol.
+- **Not multithreaded.** A single-threaded matcher fed by a lock-free
+  SPSC queue is a textbook pattern — the engine is ready for it
+  (clean trade-listener seam), but adding threads would be cosmetic
+  until network ingestion or multi-symbol matching exists.
+- **Not production-grade for storage.** No persistence, no
+  audit-log replay, no recovery story.
+- **Not microbenchmarked with `rdtsc` / pinned cores.** Latency
+  numbers above are honest `steady_clock` measurements on Windows;
+  sub-microsecond tails are scheduler-bound, not engine-bound. See
+  `design.md §7`.
 
 ## References
 
-- Larry Harris — *Trading and Exchanges*, ch. 6–9 (order book mechanics)
+- Larry Harris — *Trading and Exchanges*, ch. 6–9 (book mechanics)
 - QuantCup matching engine challenge (open-source reference impls)
-- Optiver / IMC / Jane Street public talks on exchange architecture (YouTube)
+- LMAX Disruptor paper (cache-friendly queue patterns)
