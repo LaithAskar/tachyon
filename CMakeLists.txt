@@ -24,6 +24,9 @@ target_include_directories(tachyon_core PUBLIC include)
 add_executable(tachyon apps/main.cpp)
 target_link_libraries(tachyon PRIVATE tachyon_core)
 
+add_executable(tachyon_stream apps/stream_demo.cpp)
+target_link_libraries(tachyon_stream PRIVATE tachyon_core)
+
 option(TACHYON_BUILD_TESTS "Build unit tests" ON)
 if(TACHYON_BUILD_TESTS)
     enable_testing()

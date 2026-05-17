@@ -100,6 +100,30 @@ void BM_MixedFlow(benchmark::State& state) {
 }
 BENCHMARK(BM_MixedFlow)->Arg(100'000)->Unit(benchmark::kMillisecond);
 
+// Same workload as BM_MixedFlow but uses the out-param submit() so the Trade
+// buffer is allocated once and reused. Designed to be diff'd against
+// BM_MixedFlow to show the cost of value-return on a trade-heavy workload.
+void BM_MixedFlow_OutParam(benchmark::State& state) {
+    const int n = static_cast<int>(state.range(0));
+    const Stream s = make_mixed(n, /*seed=*/43);
+
+    for (auto _ : state) {
+        state.PauseTiming();
+        OrderBook book;
+        std::vector<Trade> trades;
+        trades.reserve(32);            // typical max trades-per-submit for this flow
+        state.ResumeTiming();
+
+        for (const Order& o : s.orders) {
+            book.submit(o, trades);
+            benchmark::DoNotOptimize(trades);
+        }
+        benchmark::ClobberMemory();
+    }
+    state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(n));
+}
+BENCHMARK(BM_MixedFlow_OutParam)->Arg(100'000)->Unit(benchmark::kMillisecond);
+
 void BM_Cancel(benchmark::State& state) {
     const int n = static_cast<int>(state.range(0));
     const Stream s = make_non_crossing(n, /*seed=*/44);
