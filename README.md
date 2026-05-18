@@ -1,16 +1,56 @@
 # Tachyon
 
 Single-symbol limit order book and matching engine in C++17, with a live
-WebSocket dashboard. Built to demonstrate the data structures and
-allocation discipline that exchange-grade systems run on.
+WebSocket dashboard. Built to demonstrate the data-structure and
+allocation discipline that real exchange matching engines run on.
 
 <!-- TODO: capture a screenshot of the running dashboard, save as docs/dashboard.png -->
 
-![dashboard](docs/dashboard.png)
+![Tachyon live dashboard](docs/dashboard.png)
+
+## In plain English
+
+A stock exchange is a giant order desk: thousands of traders shout "I'll
+buy 100 at \$50" and "I'll sell 50 at \$51," and someone has to keep a
+tidy list of every offer in price order and pair up buyers with sellers
+the instant their prices meet — fairly, first-come-first-served. That
+bookkeeper is called a **matching engine**, and it's the beating heart
+of every stock, futures, and crypto exchange.
+
+Tachyon is a from-scratch matching engine for one symbol at a time,
+built as a learning and portfolio project. Think of it as a fully
+working model engine for a Formula 1 car: not the whole car, won't
+race at Monaco, but every piston is the real thing.
+
+Two things make it interesting:
+
+- **It's fast.** On one CPU core of a normal Windows desktop, it
+  processes about **4.5 million orders per second**, and each order is
+  handled in roughly **300 nanoseconds**. A blink of an eye is about
+  100 million nanoseconds — so one order is about one three-hundred-thousandth
+  of a blink. That speed comes from using the same techniques
+  high-frequency trading firms use: memory laid out so the CPU never
+  has to fetch from far away, no memory allocations happening while
+  trades are flowing, lookups that take the same fixed time no matter
+  how busy the book gets.
+- **It's fair and predictable.** It obeys "price-time priority" — best
+  price wins, ties go to whoever arrived first — and refuses to let a
+  trader accidentally trade with themselves. It supports the order
+  types real traders actually use ("fill it now or kill it," "fill
+  what you can right now and cancel the rest," etc.).
+
+**What it honestly isn't:** it handles only one symbol, doesn't talk to
+a real market, and has no permanent storage — pull the plug and
+everything vanishes. The numbers above are the *core matching loop in
+memory*, not a full exchange system. The point is to show I can build
+the core to the same engineering standard as the people who do this
+professionally.
 
 ## Numbers
 
-Single-threaded core, commodity Windows desktop, MSVC `/O2`:
+Single-threaded core, commodity Windows desktop, MSVC `/O2`. These
+measure the in-memory matching loop only — no network, no persistence,
+single symbol:
 
 | metric | value |
 |---|---|
