@@ -11,6 +11,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(tachyon_tests
     test_order_book.cpp
     test_spsc_queue.cpp
+    test_threaded_matcher.cpp
 )
 target_link_libraries(tachyon_tests
     PRIVATE
