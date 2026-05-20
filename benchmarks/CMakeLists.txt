@@ -23,3 +23,8 @@ target_link_libraries(bench_throughput
 # Latency percentile harness, no GB dependency (manual histogram).
 add_executable(bench_latency bench_latency.cpp)
 target_link_libraries(bench_latency PRIVATE tachyon_core)
+
+# rdtsc-based latency harness. Higher resolution than steady_clock for the
+# bare OrderBook hot path. Windows-specific pinning/priority calls.
+add_executable(bench_latency_rdtsc bench_latency_rdtsc.cpp)
+target_link_libraries(bench_latency_rdtsc PRIVATE tachyon_core)

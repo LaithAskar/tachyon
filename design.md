@@ -211,9 +211,32 @@ no-Google-Benchmark equivalent of `DoNotOptimize` — a write to a
 
 On Windows `steady_clock` has roughly 100ns resolution and the OS
 scheduler introduces multi-millisecond pauses at the high end of the
-distribution. Measuring sub-microsecond tails honestly would need core
-pinning, real-time priority, and `QueryPerformanceCounter` direct.
-Out of scope for v1.
+distribution. Measuring sub-microsecond tails honestly needs core
+pinning, real-time priority, and a higher-resolution clock — see
+`bench_latency_rdtsc.cpp` below.
+
+**`bench_latency_rdtsc.cpp`** (standalone) — *per-op latency with cycle
+resolution*. Same shape as the steady_clock version but:
+
+1. Pin the measuring thread to CPU 0 via `SetThreadAffinityMask`. TSC
+   is per-core; migrations mid-measurement give garbage.
+2. `SetThreadPriority(THREAD_PRIORITY_TIME_CRITICAL)`. Best Windows can
+   do without DPC-level hacks — it does **not** make the thread
+   preempt-immune.
+3. `lfence` + `__rdtscp(&aux)` bracketing each operation. `__rdtscp`
+   serialises on retire (waits for prior µops); `lfence` stops later
+   µops from issuing before the read. The pair brackets the op tightly.
+4. Calibrate the TSC against `steady_clock` once at startup (~100ms
+   anchor), then convert cycles → ns.
+5. Three scenarios measured separately — submit-no-match,
+   submit-with-match, cancel — instead of the mixed-flow blend.
+   Split lets us see which path dominates which percentile.
+
+What this still doesn't control for: SMT siblings, turbo-boost
+P-state changes, interrupts, DPCs. All show up as tail. If `max` is
+>100× `p99.9`, something jittered — re-run rather than trust it.
+
+### Current numbers (post-v2 internals, commodity Windows desktop)
 
 ### Current numbers (post-v2 internals, commodity Windows desktop)
 
@@ -224,7 +247,8 @@ Out of scope for v1.
 | `BM_Cancel`                    | ~5.0M ops/sec | cancel is now O(1) hash + O(1) unlink |
 | `BM_InsertNoCross`             | ~2.6M ops/sec | grows the book; touches one fresh level per insert |
 
-Latency from `bench_latency` (50k prewarm, 100k measured, mixed flow):
+Latency from `bench_latency` (50k prewarm, 100k measured, mixed flow,
+steady_clock):
 
 | percentile | latency |
 |------------|---------|
@@ -236,6 +260,43 @@ Latency from `bench_latency` (50k prewarm, 100k measured, mixed flow):
 
 p99 sits 10× under the README's original 20µs target.
 
+Latency from `bench_latency_rdtsc` (200k samples per scenario, TSC
+2.918 GHz, pinned to CPU 0, `TIME_CRITICAL` priority):
+
+| percentile | submit (no match) | submit (with match) | cancel |
+|------------|-------------------|---------------------|--------|
+| min        | 61 ns             | 64 ns               | 60 ns  |
+| p50        | **149 ns**        | **193 ns**          | **108 ns** |
+| p90        | 337 ns            | 303 ns              | 182 ns |
+| p99        | **567 ns**        | **438 ns**          | **299 ns** |
+| p99.9      | 21 µs             | 671 ns              | 438 ns |
+| p99.99     | 176 µs            | 17 µs               | 6.8 µs |
+| max        | 4.6 ms            | 277 µs              | 120 µs |
+
+Reading the table honestly:
+
+- **The steady_clock p50 (300 ns) was high.** With cycle-resolution
+  measurement the body-of-distribution submit cost is ~150 ns
+  (no-match) or ~190 ns (with-match), not 300. The earlier number was
+  partly real and partly the ~100 ns floor of `steady_clock` showing
+  up as a fixed offset.
+- **Cancel is the cheapest path.** p50 108 ns — one hash lookup, one
+  unlink, one pool release, occasionally one bit-scan. The earlier
+  ~5M ops/sec throughput number is the corresponding number from the
+  other direction (200 ns/op).
+- **submit-no-match has the worst p99.9** by a wide margin (21 µs vs
+  670 ns for submit-with-match). The likely reason is Pool block
+  growth: when the free-list is exhausted, `acquire()` allocates a
+  fresh `OrderNode[4096]` block, which is a `new` and pays the cost
+  of however long the page allocator decides to take. With-match
+  paths don't grow the pool. Removing that tail would need either
+  pre-warm of more pool blocks or a fallback path that's allocation-
+  free in the bad case.
+- **The 4.6 ms max is one preemption.** TIME_CRITICAL is best-effort,
+  not real-time. On commodity Windows there is no way to make this
+  go away without driver-level intervention; the number is a
+  statement about the OS, not the engine.
+
 ## 8. Known limitations (post-v2)
 
 The map → flat ladder and list → intrusive-list-with-pool refactors
@@ -245,11 +306,13 @@ landed. The remaining honest gap list:
   the convenience overload. The out-param `submit(const Order&,
   std::vector<Trade>& out)` is the production path; the value-return
   form exists for callers that don't care about steady-state cost.
-- **Single-threaded by design.** A real exchange splits ingestion/parsing
-  from matching across a lock-free SPSC queue so the matcher's L1/L2
-  cache isn't polluted by network code. Tachyon doesn't have network
-  code, so the split would be cosmetic; for a multi-symbol extension
-  the argument flips and the queue becomes essential.
+- ~~**Single-threaded by design.**~~ As of phase 3 the ingest/matching
+  split has landed: `SpscQueue` (header-only, lock-free,
+  cache-line-padded), `ThreadedMatcher` (single-symbol OrderBook behind
+  a worker thread), and `Exchange` (N symbols, one worker dispatching by
+  `symbol_id`). The OrderBook itself stays single-threaded inside the
+  worker; the queues only synchronise the boundaries. The rdtsc numbers
+  above are bare-book costs and don't include SPSC enqueue/dequeue.
 - **Default allocator only at startup.** The pool grows in blocks via
   `std::make_unique<OrderNode[]>`; once warmed, the hot path is
   malloc-free. Cold start still pays per-block.
