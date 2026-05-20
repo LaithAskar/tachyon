@@ -12,6 +12,7 @@ struct Trade {
     Price       price;
     Quantity    quantity;
     TimestampNs timestamp_ns;
+    SymbolId    symbol_id = 0;   // Exchange stamps this; OrderBook leaves it 0
 };
 
 // Compact one-line JSON form. Useful for streaming each Trade as a single

@@ -25,21 +25,24 @@ struct EngineMessage {
         Cancel = 1,
     };
 
-    Kind    kind     = Kind::Submit;
-    Order   order    = {};
-    OrderId order_id = 0;
+    Kind     kind      = Kind::Submit;
+    SymbolId symbol_id = 0;     // routed by Exchange; ignored by ThreadedMatcher
+    Order    order     = {};
+    OrderId  order_id  = 0;
 
-    static EngineMessage make_submit(const Order& o) noexcept {
+    static EngineMessage make_submit(const Order& o, SymbolId sym = 0) noexcept {
         EngineMessage m;
-        m.kind  = Kind::Submit;
-        m.order = o;
+        m.kind      = Kind::Submit;
+        m.symbol_id = sym;
+        m.order     = o;
         return m;
     }
 
-    static EngineMessage make_cancel(OrderId id) noexcept {
+    static EngineMessage make_cancel(OrderId id, SymbolId sym = 0) noexcept {
         EngineMessage m;
-        m.kind     = Kind::Cancel;
-        m.order_id = id;
+        m.kind      = Kind::Cancel;
+        m.symbol_id = sym;
+        m.order_id  = id;
         return m;
     }
 };

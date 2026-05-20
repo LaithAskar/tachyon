@@ -21,6 +21,9 @@ std::string to_json(const Trade& t) {
     s += R"(,"price":)"; s += std::to_string(t.price);
     s += R"(,"qty":)";   s += std::to_string(t.quantity);
     s += R"(,"ts":)";    s += std::to_string(t.timestamp_ns);
+    if (t.symbol_id != 0) {                       // omit for single-symbol callers
+        s += R"(,"sym":)"; s += std::to_string(t.symbol_id);
+    }
     s += '}';
     return s;
 }
