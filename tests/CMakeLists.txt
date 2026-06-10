@@ -25,3 +25,13 @@ target_link_libraries(tachyon_tests PRIVATE Threads::Threads)
 
 include(GoogleTest)
 gtest_discover_tests(tachyon_tests)
+
+add_test(NAME tachyon_cli_demo_smoke COMMAND tachyon)
+set_tests_properties(tachyon_cli_demo_smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION "FINAL STATS"
+)
+
+add_test(NAME tachyon_stream_smoke COMMAND tachyon_stream 5 2 0)
+set_tests_properties(tachyon_stream_smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION "\\\"event\\\":\\\"order\\\""
+)
