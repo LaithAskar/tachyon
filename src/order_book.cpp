@@ -62,19 +62,40 @@ bool crosses(Side taker_side, OrderType taker_type, Price taker_price, Price bes
 }  // namespace
 
 // ---- ctor / span setup ----------------------------------------------------
+namespace {
+
+// The documented flat-ladder design budgets about 12 MB per book for the
+// default 200,001 price levels (two ladders plus their bitmaps). Keep custom
+// ranges within that same supported allocation and scan-time envelope.
+constexpr std::uint64_t kMaxSupportedSpan = 200'001;
+
+std::size_t checked_span(Price tick_min, Price tick_max) {
+    if (tick_max < tick_min) {
+        throw std::invalid_argument("OrderBook: tick_max < tick_min");
+    }
+
+    // Convert before subtracting so ranges crossing zero cannot overflow signed
+    // Price arithmetic. The subtraction is modulo 2^64, which equals the
+    // mathematical distance for an ordered pair of int64 prices.
+    const auto distance = static_cast<std::uint64_t>(tick_max)
+                        - static_cast<std::uint64_t>(tick_min);
+    if (distance >= kMaxSupportedSpan) {
+        throw std::invalid_argument("OrderBook: tick range exceeds supported span");
+    }
+    return static_cast<std::size_t>(distance + 1);
+}
+
+}  // namespace
+
 OrderBook::OrderBook(Price tick_min, Price tick_max)
     : tick_min_(tick_min),
       tick_max_(tick_max),
-      span_(static_cast<std::size_t>(tick_max - tick_min + 1)),
+      span_(checked_span(tick_min, tick_max)),
       bid_levels_(span_),
       ask_levels_(span_),
       bid_bitmap_((span_ + 63) / 64, 0ull),
       ask_bitmap_((span_ + 63) / 64, 0ull),
-      best_ask_idx_(static_cast<std::int64_t>(span_)) {
-    if (tick_max < tick_min) {
-        throw std::invalid_argument("OrderBook: tick_max < tick_min");
-    }
-}
+      best_ask_idx_(static_cast<std::int64_t>(span_)) {}
 
 // ---- bitmap ops -----------------------------------------------------------
 void OrderBook::set_bit(std::vector<std::uint64_t>& bm, std::size_t idx) {
@@ -150,25 +171,11 @@ void OrderBook::unlink(Level& lv, OrderNode* n) {
 }
 
 // ---- submit ---------------------------------------------------------------
-namespace {
-
-// FOK pre-check: walk opposite levels best→worst with the same semantics as
-// the real matching loop (skip same-account makers; stop at a level that
-// still has same-account leftovers after consuming non-self). Returns true
-// iff at least `need` quantity is available to the taker.
-bool fok_can_fill(const Order&                                taker,
-                  const std::vector<OrderBook::LevelView>&    /*unused*/,
-                  Side                                         opposite_side,
-                  const std::vector<std::uint64_t>&            bm,
-                  const std::vector<OrderBook::LevelView>&     /*unused2*/) {
-    (void)taker; (void)opposite_side; (void)bm;
-    return true;   // overridden by inline version below
-}
-
-}  // namespace
-
 void OrderBook::submit(const Order& order, std::vector<Trade>& out) {
     out.clear();
+    // IDs identify live orders. Reject duplicates before matching so a second
+    // order cannot trade or rest while cancel(id) still points at the first.
+    if (id_index_.find(order.id) != id_index_.end()) return;
     if (order.quantity == 0) return;
     // Limit orders outside the configured tick range are rejected silently
     // (would need an extension to the ladder; not in scope for v1).
@@ -276,6 +283,20 @@ void OrderBook::submit(const Order& order, std::vector<Trade>& out) {
         Level& own_level = taker_is_buy ? bid_levels_[idx] : ask_levels_[idx];
         OrderNode* n = pool_.acquire();
         n->order = working;
+
+        // Establish the ID index before making the node visible in the book.
+        // This keeps list/bitmap/size state unchanged if insertion is rejected.
+        try {
+            const auto inserted = id_index_.emplace(working.id, n).second;
+            if (!inserted) {
+                pool_.release(n);
+                return;
+            }
+        } catch (...) {
+            pool_.release(n);
+            throw;
+        }
+
         link_back(own_level, n);
 
         auto& own_bitmap = taker_is_buy ? bid_bitmap_ : ask_bitmap_;
@@ -291,7 +312,6 @@ void OrderBook::submit(const Order& order, std::vector<Trade>& out) {
                 best_ask_idx_ = static_cast<std::int64_t>(idx);
             }
         }
-        id_index_.emplace(working.id, n);
         ++total_orders_;
     }
 }

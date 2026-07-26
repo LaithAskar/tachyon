@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <random>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -35,6 +37,22 @@ TEST(OrderBook, EmptyOnConstruction) {
     EXPECT_EQ(book.size(), 0u);
     EXPECT_FALSE(book.best_bid().has_value());
     EXPECT_FALSE(book.best_ask().has_value());
+}
+
+TEST(OrderBook, RejectsReversedTickRangeBeforeAllocation) {
+    EXPECT_THROW((OrderBook{/*tick_min=*/10, /*tick_max=*/8}), std::invalid_argument);
+}
+
+TEST(OrderBook, RejectsTickRangeWhoseSpanCannotBeRepresented) {
+    EXPECT_THROW((OrderBook{std::numeric_limits<Price>::min(),
+                            std::numeric_limits<Price>::max()}),
+                 std::invalid_argument);
+}
+
+TEST(OrderBook, RejectsRepresentableTickRangeBeyondSupportedLadderSpan) {
+    // The documented/default 200,001-level ladder is the supported maximum.
+    EXPECT_THROW((OrderBook{/*tick_min=*/0, /*tick_max=*/200'001}),
+                 std::invalid_argument);
 }
 
 TEST(OrderBook, SingleBuyLimitBecomesBestBid) {
@@ -250,6 +268,39 @@ TEST(OrderBook, ZeroQuantityRejected) {
     EXPECT_TRUE(trades.empty());
     EXPECT_EQ(book.size(), 0u);
     EXPECT_FALSE(book.best_bid().has_value());
+}
+
+TEST(OrderBook, DuplicateRestingIdIsRejectedWithoutLeavingAnUnindexedOrder) {
+    OrderBook book{/*tick_min=*/0, /*tick_max=*/100};
+    book.submit(make_limit(1, Side::Buy, 50, 5));
+
+    const auto trades = book.submit(make_limit(1, Side::Buy, 60, 7));
+
+    EXPECT_TRUE(trades.empty());
+    EXPECT_EQ(book.size(), 1u);
+    const auto bids = book.top_bids(2);
+    ASSERT_EQ(bids.size(), 1u);
+    EXPECT_EQ(bids[0].price, 50);
+    EXPECT_EQ(bids[0].total_qty, 5u);
+    EXPECT_EQ(bids[0].order_count, 1u);
+
+    EXPECT_TRUE(book.cancel(1));
+    EXPECT_EQ(book.size(), 0u);
+    EXPECT_FALSE(book.best_bid().has_value());
+}
+
+TEST(OrderBook, DuplicateAggressiveIdCannotMutateTheBook) {
+    OrderBook book{/*tick_min=*/0, /*tick_max=*/100};
+    book.submit(make_limit(1, Side::Buy, 50, 5));
+
+    const auto trades = book.submit(make_limit(1, Side::Sell, 50, 5));
+
+    EXPECT_TRUE(trades.empty());
+    EXPECT_EQ(book.size(), 1u);
+    ASSERT_TRUE(book.best_bid().has_value());
+    EXPECT_EQ(*book.best_bid(), 50);
+    EXPECT_FALSE(book.best_ask().has_value());
+    EXPECT_TRUE(book.cancel(1));
 }
 
 // --- Phase 2: MatchingEngine trade listener --------------------------------
