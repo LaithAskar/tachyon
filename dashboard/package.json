@@ -5,7 +5,8 @@
   "description": "Live WebSocket viewer for the Tachyon matching engine.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check": "node --check server.js"
   },
   "dependencies": {
     "ws": "^8.20.1"

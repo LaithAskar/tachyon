@@ -15,13 +15,25 @@ const { spawn } = require('child_process');
 const WebSocket = require('ws');
 
 const PORT          = process.env.PORT          || 8080;
-const STREAM_BIN    = process.env.TACHYON_STREAM
-                      || path.join(__dirname, '..', 'build', 'bin', 'Release',
-                                   'tachyon_stream.exe');
 const DELAY_MS      = process.env.DELAY_MS      || '50';   // ~20 events/sec
 const N_EVENTS      = process.env.N_EVENTS      || '0';    // 0 = infinite
 const DEPTH         = process.env.DEPTH         || '8';
 const PUBLIC_DIR    = path.join(__dirname, 'public');
+
+function defaultStreamBinary() {
+    if (process.env.TACHYON_STREAM) return process.env.TACHYON_STREAM;
+
+    // CMake single-config generators (Linux/macOS) write build/bin/tachyon_stream;
+    // Visual Studio multi-config generators write build/bin/<Config>/tachyon_stream.exe.
+    const candidates = [
+        path.join(__dirname, '..', 'build', 'bin', 'tachyon_stream'),
+        path.join(__dirname, '..', 'build', 'bin', 'Release', 'tachyon_stream.exe'),
+        path.join(__dirname, '..', 'build', 'bin', 'Debug', 'tachyon_stream.exe'),
+    ];
+    return candidates.find(fs.existsSync) || candidates[0];
+}
+
+const STREAM_BIN = defaultStreamBinary();
 
 // ---- HTTP: static file server for the dashboard UI -------------------------
 const MIME = {
@@ -30,20 +42,42 @@ const MIME = {
     '.css' : 'text/css; charset=utf-8',
 };
 
+let requestSeq = 0;
+const startedAt = new Date();
+
 const httpServer = http.createServer((req, res) => {
+    const requestId = (++requestSeq).toString(36);
+    res.setHeader('X-Request-Id', requestId);
+
+    if (req.url === '/health' || req.url === '/healthz') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({
+            ok: true,
+            requestId,
+            uptimeSec: Math.round(process.uptime()),
+            startedAt: startedAt.toISOString(),
+            streamBinary: STREAM_BIN,
+            clients: wss ? wss.clients.size : 0,
+        }));
+    }
+
     let rel = req.url === '/' ? '/index.html' : req.url;
     // strip query string; defend against path traversal
     rel = rel.split('?')[0].replace(/\\/g, '/');
     const file = path.normalize(path.join(PUBLIC_DIR, rel));
-    if (!file.startsWith(PUBLIC_DIR)) {
+    const relPath = path.relative(PUBLIC_DIR, file);
+    if (relPath.startsWith('..') || path.isAbsolute(relPath)) {
+        console.log(`[http] ${requestId} ${req.method} ${req.url} -> 403`);
         res.writeHead(403); return res.end('forbidden');
     }
     fs.readFile(file, (err, data) => {
         if (err) {
+            console.log(`[http] ${requestId} ${req.method} ${req.url} -> 404`);
             res.writeHead(404); return res.end('not found');
         }
         const ext = path.extname(file).toLowerCase();
         res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+        console.log(`[http] ${requestId} ${req.method} ${req.url} -> 200`);
         res.end(data);
     });
 });

@@ -4,9 +4,9 @@ Single-symbol limit order book and matching engine in C++17, with a live
 WebSocket dashboard. Built to demonstrate the data-structure and
 allocation discipline that real exchange matching engines run on.
 
-<!-- TODO: capture a screenshot of the running dashboard, save as docs/dashboard.png -->
-
-![Tachyon live dashboard](docs/dashboard.png)
+Local dashboard screenshot/GIF: pending capture from `http://localhost:8080`.
+For the shortest reviewer path, see [`docs/demo.md`](docs/demo.md), then run the
+five-minute demo below.
 
 ## In plain English
 
@@ -94,6 +94,47 @@ script bridges to a vanilla-JS WebSocket dashboard.
 Full reasoning, trade-offs, and the property-based test invariants
 live in [`design.md`](design.md).
 
+## Five-minute local demo
+
+Prerequisites: a C++17 compiler. CMake is recommended for the full test suite;
+Node/npm are only needed for the dashboard. A more reviewer-oriented checklist,
+including screenshot/GIF capture guidance and benchmark caveats, lives in
+[`docs/demo.md`](docs/demo.md).
+
+```sh
+# Headless path: compile the two demo binaries directly and run bounded checks.
+bash scripts/smoke_demo.sh
+
+# Full CMake path: build apps + unit/property tests.
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+
+# Scripted CLI walkthrough.
+./build/bin/tachyon
+
+# Bounded NDJSON stream for dashboard/file consumers.
+./build/bin/tachyon_stream 5 2 0
+```
+
+Dashboard demo (local only, not a public hosted demo):
+
+```sh
+npm --prefix dashboard install
+npm --prefix dashboard run check
+TACHYON_STREAM=../build/smoke/tachyon_stream PORT=8080 N_EVENTS=500 DELAY_MS=20 npm --prefix dashboard start
+# open http://localhost:8080
+# health check from another shell: curl http://localhost:8080/health
+```
+
+On Windows with Visual Studio generators, the app binaries usually live under
+`build/bin/Release/` and use `.exe` suffixes. The dashboard auto-detects both
+single-config (`build/bin/tachyon_stream`) and Visual Studio-style paths; set
+`TACHYON_STREAM=/path/to/tachyon_stream` to override it.
+
+Configuration knobs are documented in [`docs/configuration.md`](docs/configuration.md).
+Current project status and non-goals are summarized in [`docs/status.md`](docs/status.md).
+
 ## Build (Windows, VS 2022)
 
 Open **Developer PowerShell for VS 2022**, then from this directory:
@@ -117,20 +158,22 @@ cmake --build build --config Release
 
 ## Run the live dashboard
 
-```powershell
-# one-time
-cmake --build build --config Release --target tachyon_stream
+```sh
+# one-time after building tachyon_stream
 npm --prefix dashboard install
+npm --prefix dashboard run check
 
 # every time
-node dashboard\server.js
+PORT=8080 DELAY_MS=20 npm --prefix dashboard start
 # open http://localhost:8080
+# health: curl http://localhost:8080/health
 ```
 
 The Node script spawns the C++ `tachyon_stream` binary, reads its
 NDJSON stdout, and rebroadcasts each event as a WebSocket frame. The
 browser renders depth bars, trade tape, BBO, and rolling events/sec.
-Tune `DELAY_MS=20 node dashboard\server.js` for a faster stream.
+Set `TACHYON_STREAM` if the binary is not under `build/bin`; tune
+`DELAY_MS=20` for a faster stream.
 
 ## API surface
 
