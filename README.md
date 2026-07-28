@@ -4,7 +4,8 @@ Single-symbol limit order book and matching engine in C++17, with a live
 WebSocket dashboard. Built to demonstrate the data-structure and
 allocation discipline that real exchange matching engines run on.
 
-Local dashboard screenshot: pending. The dashboard can be launched from the
+Local dashboard screenshot/GIF: pending capture from `http://localhost:8080`.
+For the shortest reviewer path, see [`docs/demo.md`](docs/demo.md), then run the
 five-minute demo below.
 
 ## In plain English
@@ -96,7 +97,9 @@ live in [`design.md`](design.md).
 ## Five-minute local demo
 
 Prerequisites: a C++17 compiler. CMake is recommended for the full test suite;
-Node/npm are only needed for the dashboard.
+Node/npm are only needed for the dashboard. A more reviewer-oriented checklist,
+including screenshot/GIF capture guidance and benchmark caveats, lives in
+[`docs/demo.md`](docs/demo.md).
 
 ```sh
 # Headless path: compile the two demo binaries directly and run bounded checks.
@@ -114,14 +117,14 @@ ctest --test-dir build -C Release --output-on-failure
 ./build/bin/tachyon_stream 5 2 0
 ```
 
-Dashboard demo:
+Dashboard demo (local only, not a public hosted demo):
 
 ```sh
 npm --prefix dashboard install
 npm --prefix dashboard run check
-PORT=8080 N_EVENTS=500 DELAY_MS=20 npm --prefix dashboard start
+TACHYON_STREAM=../build/smoke/tachyon_stream PORT=8080 N_EVENTS=500 DELAY_MS=20 npm --prefix dashboard start
 # open http://localhost:8080
-# health check: curl http://localhost:8080/health
+# health check from another shell: curl http://localhost:8080/health
 ```
 
 On Windows with Visual Studio generators, the app binaries usually live under
